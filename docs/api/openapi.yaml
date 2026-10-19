@@ -1,0 +1,454 @@
+openapi: 3.0.3
+
+# Fuente canónica del contrato REST API de Descubre Barquisimeto (corrección CC-6).
+# README.md §4 reproduce este archivo de forma exacta; ante cualquier cambio,
+# se edita este archivo y se sincroniza la copia del README.
+# Origen: prompts.md §4, Prompt 1 — Diseño y documentación del contrato REST API.
+# Diferencias respecto del contrato inicial del README: docs/api/api-reference.md §7.
+# Estado: contrato propuesto de tres operaciones; endpoints no implementados ni desplegados.
+
+info:
+  title: Descubre Barquisimeto API
+  version: 1.0.0
+  description: >
+    API REST para catálogo turístico y gestión de reservas.
+    Documenta exclusivamente las tres operaciones aprobadas para la entrega 1.
+    No incluye pagos ni disponibilidad en tiempo real.
+
+servers:
+  - url: /api/v1
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      description: >
+        Mecanismo provisional para acceso administrativo. No equivale a la
+        adopción de JWT; el mecanismo definitivo está pendiente (ADR-P01).
+
+  schemas:
+    Error:
+      type: object
+      required: [error, message]
+      description: >
+        Formato estándar de error. Los valores de `error` mostrados en los
+        ejemplos son ilustrativos; el catálogo de códigos está pendiente (A17).
+      properties:
+        error:
+          type: string
+          example: VALIDATION_ERROR
+        message:
+          type: string
+        details:
+          type: object
+          additionalProperties: true
+
+    Category:
+      type: object
+      properties:
+        name: { type: string }
+        slug: { type: string }
+
+    AttractionImage:
+      type: object
+      properties:
+        image_url: { type: string, format: uri }
+        is_primary: { type: boolean }
+        display_order: { type: integer }
+
+    Attraction:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        description: { type: string }
+        location: { type: string }
+        latitude: { type: number, nullable: true }
+        longitude: { type: number, nullable: true }
+        categories:
+          type: array
+          items:
+            $ref: "#/components/schemas/Category"
+        images:
+          type: array
+          items:
+            $ref: "#/components/schemas/AttractionImage"
+
+    BookingRequestBase:
+      type: object
+      description: Campos comunes a las solicitudes de alojamiento y de tour.
+      required:
+        - contact_name
+        - contact_email
+        - start_date
+        - people_count
+      properties:
+        contact_name:
+          type: string
+          minLength: 1
+        contact_email:
+          type: string
+          format: email
+        contact_phone: { type: string }
+        start_date:
+          type: string
+          format: date
+        people_count:
+          type: integer
+          minimum: 1
+        observations: { type: string }
+
+    AccommodationBookingRequest:
+      description: >
+        Solicitud de alojamiento. Requiere accommodation_id y end_date;
+        end_date debe ser posterior a start_date (regla validada por el backend).
+        tour_id debe omitirse o ser null.
+      allOf:
+        - $ref: "#/components/schemas/BookingRequestBase"
+        - type: object
+          required:
+            - accommodation_id
+            - end_date
+          properties:
+            accommodation_id:
+              type: string
+              format: uuid
+            tour_id:
+              type: string
+              format: uuid
+              nullable: true
+              enum: [null]
+            end_date:
+              type: string
+              format: date
+
+    TourBookingRequest:
+      description: >
+        Solicitud de tour. Requiere tour_id. accommodation_id y end_date
+        deben omitirse o ser null.
+      allOf:
+        - $ref: "#/components/schemas/BookingRequestBase"
+        - type: object
+          required:
+            - tour_id
+          properties:
+            tour_id:
+              type: string
+              format: uuid
+            accommodation_id:
+              type: string
+              format: uuid
+              nullable: true
+              enum: [null]
+            end_date:
+              type: string
+              format: date
+              nullable: true
+              enum: [null]
+
+    BookingRequestCreate:
+      description: >
+        Se informa exactamente uno entre accommodation_id y tour_id.
+        Los alojamientos requieren end_date posterior a start_date.
+        Para tours, end_date debe omitirse o ser null.
+      oneOf:
+        - $ref: "#/components/schemas/AccommodationBookingRequest"
+        - $ref: "#/components/schemas/TourBookingRequest"
+
+    BookingCreated:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        status:
+          type: string
+          enum: [PENDING]
+        message: { type: string }
+        created_at:
+          type: string
+          format: date-time
+
+    BookingStatusUpdate:
+      type: object
+      required: [status]
+      additionalProperties: false
+      properties:
+        status:
+          type: string
+          enum: [CONFIRMED, REJECTED]
+
+    BookingStatusResponse:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        status:
+          type: string
+          enum: [CONFIRMED, REJECTED]
+        message: { type: string }
+
+paths:
+  /attractions:
+    get:
+      tags: [Attractions]
+      summary: Consultar atractivos turísticos
+      description: >
+        Retorna atractivos activos de Barquisimeto y alrededores.
+        Permite búsqueda por nombre, filtros por categoría y
+        paginación. No requiere autenticación.
+      security: []
+      parameters:
+        - name: q
+          in: query
+          schema: { type: string }
+        - name: category
+          in: query
+          schema: { type: string }
+        - name: page
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+      responses:
+        "200":
+          description: Listado paginado de atractivos
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Attraction"
+                  pagination:
+                    type: object
+                    properties:
+                      page: { type: integer }
+                      limit: { type: integer }
+                      total: { type: integer }
+                      total_pages: { type: integer }
+              example:
+                data:
+                  - id: "7d2e8aa0-4a73-4de1-92c5-b12e097a4121"
+                    name: "Obelisco de Barquisimeto"
+                    description: "Monumento emblemático de la ciudad."
+                    location: "Barquisimeto, Lara, Venezuela"
+                    latitude: 10.062
+                    longitude: -69.341
+                    categories:
+                      - name: "Histórico"
+                        slug: "historico"
+                    images: []
+                pagination:
+                  page: 1
+                  limit: 20
+                  total: 1
+                  total_pages: 1
+        "400":
+          description: Parámetros de consulta inválidos
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: VALIDATION_ERROR
+                message: "Los parámetros de consulta no son válidos."
+                details:
+                  limit: "Debe estar entre 1 y 100."
+        "500":
+          description: Error interno del servidor
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: INTERNAL_ERROR
+                message: "Ocurrió un error inesperado. Inténtalo más tarde."
+
+  /booking-requests:
+    post:
+      tags: [Booking Requests]
+      summary: Registrar solicitud de reserva
+      description: >
+        Permite solicitar alojamiento o tour sin registrarse.
+        Valida que el servicio esté activo, los datos de contacto,
+        la cantidad de personas y las fechas correspondientes.
+        Crea una solicitud en estado PENDING.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BookingRequestCreate"
+            examples:
+              alojamiento:
+                value:
+                  accommodation_id: "8f7a2e41-1c99-4fd0-9b2c-87d9b10a6e13"
+                  contact_name: "María González"
+                  contact_email: "maria@example.com"
+                  start_date: "2026-12-15"
+                  end_date: "2026-12-18"
+                  people_count: 2
+              tour:
+                value:
+                  tour_id: "a2b4569c-15d3-49c7-b6fa-980c35e0ab12"
+                  contact_name: "Carlos Pérez"
+                  contact_email: "carlos@example.com"
+                  start_date: "2026-12-16"
+                  people_count: 3
+      responses:
+        "201":
+          description: Solicitud registrada correctamente
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BookingCreated"
+              example:
+                id: "b49ecb72-8a34-4cb2-82a9-bd2c2a9c0f31"
+                status: PENDING
+                message: "Tu solicitud fue recibida correctamente."
+                created_at: "2026-12-10T14:30:00Z"
+        "400":
+          description: Datos inválidos o fechas inconsistentes
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                fechas_invalidas:
+                  value:
+                    error: VALIDATION_ERROR
+                    message: "La fecha de salida debe ser posterior a la fecha de entrada."
+                    details:
+                      end_date: "Debe ser posterior a start_date."
+                dos_servicios:
+                  value:
+                    error: VALIDATION_ERROR
+                    message: "La solicitud debe referirse a un alojamiento o a un tour, no a ambos."
+                    details:
+                      accommodation_id: "Excluyente con tour_id."
+                      tour_id: "Excluyente con accommodation_id."
+        "404":
+          description: Alojamiento o tour inexistente o inactivo
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: SERVICE_NOT_AVAILABLE
+                message: "El servicio solicitado no admite solicitudes nuevas."
+        "500":
+          description: Error interno del servidor
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: INTERNAL_ERROR
+                message: "Ocurrió un error inesperado. Inténtalo más tarde."
+
+  /booking-requests/{id}/status:
+    patch:
+      tags: [Booking Requests]
+      summary: Confirmar o rechazar solicitud
+      description: >
+        Permite a un administrador cambiar una solicitud PENDING
+        a CONFIRMED o REJECTED. Los estados finales son inmutables.
+        La actualización debe ser atómica para evitar conflictos
+        entre administradores.
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BookingStatusUpdate"
+            example:
+              status: CONFIRMED
+      responses:
+        "200":
+          description: Estado actualizado correctamente
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BookingStatusResponse"
+              example:
+                id: "b49ecb72-8a34-4cb2-82a9-bd2c2a9c0f31"
+                status: CONFIRMED
+                message: "La solicitud fue confirmada correctamente."
+        "400":
+          description: Estado solicitado inválido
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: VALIDATION_ERROR
+                message: "El estado solicitado no es válido."
+                details:
+                  status: "Valores permitidos: CONFIRMED, REJECTED."
+        "401":
+          description: Autenticación requerida
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: AUTHENTICATION_REQUIRED
+                message: "Debes iniciar sesión para realizar esta operación."
+        "403":
+          description: El usuario no tiene rol ADMIN
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: FORBIDDEN
+                message: "No tienes permisos para gestionar solicitudes."
+        "404":
+          description: Solicitud inexistente
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: NOT_FOUND
+                message: "La solicitud indicada no existe."
+        "409":
+          description: Solicitud ya resuelta o transición inválida
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: INVALID_STATUS_TRANSITION
+                message: "La solicitud ya fue resuelta."
+                details:
+                  current_status: CONFIRMED
+                  requested_status: REJECTED
+        "500":
+          description: Error interno del servidor
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: INTERNAL_ERROR
+                message: "Ocurrió un error inesperado. Inténtalo más tarde."
